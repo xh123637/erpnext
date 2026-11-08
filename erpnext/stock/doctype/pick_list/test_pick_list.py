@@ -59,6 +59,46 @@ class TestPickList(ERPNextTestSuite):
 
 		self.assertRaises(UOMMustBeIntegerError, pick_list.insert)
 
+	def test_delivery_note_from_split_pick_list_keeps_whole_number_stock_qty(self):
+		# https://github.com/frappe/erpnext/issues/64911
+		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
+
+		# Box is a whole-number UOM in the fixtures; the issue reports it as not.
+		frappe.db.set_value("UOM", "Box", "must_be_whole_number", 0)
+
+		item = make_item(
+			properties={"stock_uom": "Nos", "uoms": [{"uom": "Box", "conversion_factor": 12}]}
+		).name
+		warehouse_1 = "_Test Warehouse - _TC"
+		warehouse_2 = create_warehouse("Test Warehouse 2")
+		make_stock_entry(item_code=item, qty=5, target=warehouse_1, basic_rate=10)
+		make_stock_entry(item_code=item, qty=36, target=warehouse_2, basic_rate=10)
+
+		sales_order = make_sales_order(item_code=item, warehouse=warehouse_1, qty=2, uom="Box")
+		pick_list = create_pick_list(sales_order.name)
+		pick_list.submit()
+
+		# 2 Box = 24 Nos, split across warehouses by Bin creation: 5 Nos from
+		# warehouse_1 and 19 Nos from warehouse_2.
+		self.assertEqual(
+			{warehouse_1: 5, warehouse_2: 19},
+			{row.warehouse: row.picked_qty for row in pick_list.locations},
+		)
+
+		# 5 Nos in a Box of 12 is 0.417 Box, i.e. 5.004 Nos after rounding, which
+		# the whole-number check on Nos refuses. The rows must instead be carried
+		# in the stock UOM with the exact picked quantities.
+		delivery_note = create_delivery_note(pick_list.name)
+
+		self.assertEqual(
+			{warehouse_1: 5, warehouse_2: 19},
+			{row.warehouse: row.stock_qty for row in delivery_note.items},
+		)
+		for row in delivery_note.items:
+			self.assertEqual(row.uom, "Nos")
+			self.assertEqual(row.conversion_factor, 1)
+			self.assertEqual(row.qty, row.stock_qty)
+
 	def test_filter_locations_consumes_picked_qty_across_rows(self):
 		from erpnext.stock.doctype.pick_list.pick_list import filter_locations_by_picked_materials
 

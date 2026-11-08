@@ -302,8 +302,8 @@ def map_pl_locations(pick_list, item_mapper, target_doc, sales_order=None, selec
 			child_item.against_pick_list = pick_list.name
 			child_item.pick_list_item = location.name
 			child_item.warehouse = location.warehouse
-			child_item.qty = flt(location.picked_qty - location.delivered_qty) / (
-				flt(child_item.conversion_factor) or 1
+			child_item.qty, child_item.uom, child_item.conversion_factor = get_mapped_qty_and_uom(
+				location, child_item
 			)
 			child_item.batch_no = location.batch_no
 			child_item.serial_no = location.serial_no
@@ -323,6 +323,33 @@ def map_pl_locations(pick_list, item_mapper, target_doc, sales_order=None, selec
 	target_doc.company = pick_list.company
 	if sales_order:
 		target_doc.customer = frappe.get_value("Sales Order", sales_order, "customer")
+
+
+def get_mapped_qty_and_uom(location, child_item):
+	"""Return the (qty, uom, conversion_factor) for a Pick List location mapped to a target row.
+
+	The picked stock qty is divided by the row conversion factor to get the qty in the
+	row UOM. When that qty cannot be expressed exactly in the row UOM at the qty
+	precision, the target rounds it and the stock qty drifts (e.g. 5 Nos in a Box of 12
+	becomes 0.417 Box, i.e. 5.004 Nos), which the whole-number UOM check then refuses.
+	In that case carry the row in the stock UOM instead, so the picked quantity stays
+	exact. validate_with_previous_doc does not enforce the source UOM for rows mapped
+	from a Pick List.
+	"""
+	pending_stock_qty = flt(location.picked_qty - location.delivered_qty)
+	conversion_factor = flt(child_item.conversion_factor) or 1
+	qty = flt(pending_stock_qty / conversion_factor)
+	stock_uom = child_item.stock_uom or location.stock_uom
+
+	if (
+		stock_uom
+		and stock_uom != child_item.uom
+		and flt(flt(qty, child_item.precision("qty")) * conversion_factor, child_item.precision("stock_qty"))
+		!= flt(pending_stock_qty, child_item.precision("stock_qty"))
+	):
+		return pending_stock_qty, stock_uom, 1
+
+	return qty, child_item.uom, child_item.conversion_factor
 
 
 def add_product_bundles_to_delivery_note(pick_list, delivery_note, item_mapper, sales_order=None) -> None:

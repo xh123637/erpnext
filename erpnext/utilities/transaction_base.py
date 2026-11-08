@@ -145,6 +145,16 @@ class TransactionBase(StatusUpdater):
 
 		for field, condition in fields:
 			if prevdoc_values[field] not in [None, ""] and field not in self.exclude_fields:
+				if (
+					field in ("uom", "conversion_factor")
+					and doc
+					and doc.get("against_pick_list")
+				):
+					# Rows mapped from a Pick List may switch to the stock UOM when the
+					# picked stock qty cannot be expressed exactly in the source row UOM
+					# (e.g. 5 Nos split from a Box of 12). The quantities still match in
+					# stock units, so the previous-document UOM check does not apply.
+					continue
 				self.validate_value(field, condition, prevdoc_values[field], doc)
 
 	def get_prev_doc_reference_details(self, reference_names, reference_doctype, fields):
